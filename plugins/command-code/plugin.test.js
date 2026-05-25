@@ -325,4 +325,25 @@ describe("command-code plugin", () => {
     var monthlyLine = result.lines.find(function (l) { return l.label === "Monthly credits"; });
     expect(monthlyLine.used).toBe(100);
   });
+
+  it("shows days remaining until reset", async () => {
+    var ctx = makePluginTestContext();
+    setAuth(ctx);
+    // Set billing period to 10 days from now
+    var futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + 10);
+    mockEndpoints(
+      ctx,
+      makeCreditsResponse(),
+      makeUsageSummaryResponse(),
+      makeSubscriptionResponse({ currentPeriodEnd: futureDate.toISOString() }),
+    );
+
+    var plugin = await loadPlugin();
+    var result = plugin.probe(ctx);
+
+    var resetsLine = result.lines.find(function (l) { return l.label === "Resets in"; });
+    expect(resetsLine).toBeTruthy();
+    expect(resetsLine.value).toContain("days");
+  });
 });

@@ -11,6 +11,7 @@
   ],
   "lines": [
     { "type": "progress", "label": "Monthly credits", "scope": "overview", "primaryOrder": 1 },
+    { "type": "text", "label": "Resets in", "scope": "overview" },
     { "type": "text", "label": "Total spent", "scope": "overview" },
     { "type": "text", "label": "Tokens used", "scope": "detail" },
     { "type": "text", "label": "Models", "scope": "detail" }

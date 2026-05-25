@@ -124,11 +124,18 @@
       }
     }
 
-    // -- Parse plan name from subscription --
+    // -- Parse plan name and billing period from subscription --
     var planLabel = null
-    if (subResp && subResp.success && subResp.data && typeof subResp.data.planId === "string") {
-      var planId = subResp.data.planId
-      planLabel = PLAN_LABELS[planId] || ctx.fmt.planLabel(planId)
+    var billingPeriodEnd = null
+    if (subResp && subResp.success && subResp.data && typeof subResp.data === "object") {
+      if (typeof subResp.data.planId === "string") {
+        var planId = subResp.data.planId
+        planLabel = PLAN_LABELS[planId] || ctx.fmt.planLabel(planId)
+      }
+      // Try to get billing period end date
+      if (subResp.data.currentPeriodEnd && typeof subResp.data.currentPeriodEnd === "string") {
+        billingPeriodEnd = new Date(subResp.data.currentPeriodEnd)
+      }
     }
 
     var lines = []
@@ -141,12 +148,30 @@
       if (usedPercent > 100) usedPercent = 100
       if (usedPercent < 0) usedPercent = 0
 
-      lines.push(ctx.line.progress({
+      var progressOpts = {
         label: "Monthly credits",
         used: Math.round(usedPercent * 10) / 10,
         limit: 100,
         format: { kind: "percent" },
         periodDurationMs: 30 * 24 * 60 * 60 * 1000,
+      }
+
+      // Add resetsAt if billing period end is available
+      if (billingPeriodEnd && !isNaN(billingPeriodEnd.getTime())) {
+        progressOpts.resetsAt = billingPeriodEnd.toISOString()
+      }
+
+      lines.push(ctx.line.progress(progressOpts))
+    }
+
+    // -- Text: Days remaining until reset --
+    if (billingPeriodEnd && !isNaN(billingPeriodEnd.getTime())) {
+      var now = new Date()
+      var msRemaining = billingPeriodEnd.getTime() - now.getTime()
+      var daysRemaining = Math.max(0, Math.ceil(msRemaining / (24 * 60 * 60 * 1000)))
+      lines.push(ctx.line.text({
+        label: "Resets in",
+        value: daysRemaining + " days",
       }))
     }
 
