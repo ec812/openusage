@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import { isTauri } from "@tauri-apps/api/core"
 import { check, type Update } from "@tauri-apps/plugin-updater"
 import { relaunch } from "@tauri-apps/plugin-process"
+import { AUTO_UPDATE_ENABLED } from "@/lib/github-repo"
 
 export type UpdateStatus =
   | { status: "idle" }
@@ -33,7 +34,7 @@ export function useAppUpdate(): UseAppUpdateReturn {
   }, [])
 
   const checkForUpdates = useCallback(async () => {
-    if (!isTauri()) return
+    if (!AUTO_UPDATE_ENABLED || !isTauri() || import.meta.env.DEV) return
     if (inFlightRef.current.checking || inFlightRef.current.downloading || inFlightRef.current.installing) return
     if (statusRef.current.status === "ready") return
 
@@ -119,6 +120,7 @@ export function useAppUpdate(): UseAppUpdateReturn {
   }, [checkForUpdates])
 
   const triggerInstall = useCallback(async () => {
+    if (!AUTO_UPDATE_ENABLED || import.meta.env.DEV) return
     const update = updateRef.current
     if (!update) return
     if (statusRef.current.status !== "ready") return

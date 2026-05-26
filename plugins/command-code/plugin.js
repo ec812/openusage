@@ -105,23 +105,10 @@
       creditsRemaining = readNumber(creditsResp.credits.monthlyCredits)
     }
 
-    // -- Parse usage summary --
-    // usage summary has fields at the root: totalCost, totalMonthlyCredits, models, etc.
-    // totalMonthlyCredits = amount used this month (e.g. $3.41)
-    // Total plan = remaining + used
-    var totalCost = null
+    // -- Parse usage summary (monthly credits used this period) --
     var monthlyUsed = null
-    var totalTokens = null
-    var models = []
-
     if (usageResp && typeof usageResp === "object") {
-      totalCost = readNumber(usageResp.totalCost)
       monthlyUsed = readNumber(usageResp.totalMonthlyCredits)
-      totalTokens = readNumber(usageResp.totalTokens)
-
-      if (Array.isArray(usageResp.models)) {
-        models = usageResp.models
-      }
     }
 
     // -- Parse plan name and billing period from subscription --
@@ -175,77 +162,7 @@
       }))
     }
 
-    // -- Text: Total cost spent --
-    if (totalCost !== null && totalCost > 0) {
-      lines.push(ctx.line.text({
-        label: "Total spent",
-        value: "$" + totalCost.toFixed(2),
-      }))
-    }
-
-    // -- Text: Token usage --
-    if (totalTokens !== null && totalTokens > 0) {
-      lines.push(ctx.line.text({
-        label: "Tokens used",
-        value: fmtTokens(Math.round(totalTokens)),
-      }))
-    }
-
-    // -- Model breakdown (detail) --
-    if (models.length > 0) {
-      var totalModelCost = 0
-      var modelParts = []
-      for (var i = 0; i < models.length; i++) {
-        var m = models[i]
-        if (!m || typeof m !== "object") continue
-        var name = m.model || m.name
-        if (typeof name !== "string" || !name.trim()) continue
-
-        var cost = readNumber(m.totalCost) || 0
-        var count = readNumber(m.count) || 0
-        totalModelCost += cost
-
-        // Shorten model names for display
-        var shortName = name
-        var slashIdx = name.indexOf("/")
-        if (slashIdx !== -1) shortName = name.slice(slashIdx + 1)
-
-        var detail = shortName
-        if (cost > 0) detail += " $" + cost.toFixed(2)
-        if (count > 0) detail += " (" + count + " calls)"
-        modelParts.push(detail)
-      }
-
-      if (modelParts.length > 0) {
-        lines.push(ctx.line.text({
-          label: "Models",
-          value: modelParts.join("  "),
-        }))
-      }
-    }
-
     return { plan: planLabel, lines: lines }
-  }
-
-  function fmtTokens(n) {
-    var abs = Math.abs(n)
-    var sign = n < 0 ? "-" : ""
-    var units = [
-      { threshold: 1e9, divisor: 1e9, suffix: "B" },
-      { threshold: 1e6, divisor: 1e6, suffix: "M" },
-      { threshold: 1e3, divisor: 1e3, suffix: "K" },
-    ]
-    for (var i = 0; i < units.length; i++) {
-      var unit = units[i]
-      if (abs >= unit.threshold) {
-        var scaled = abs / unit.divisor
-        var formatted = scaled >= 10
-          ? Math.round(scaled).toString()
-          : scaled.toFixed(1).replace(/\.0$/, "")
-        return sign + formatted + unit.suffix
-      }
-    }
-    return sign + Math.round(abs).toString()
   }
 
   globalThis.__openusage_plugin = { id: "command-code", probe: probe }

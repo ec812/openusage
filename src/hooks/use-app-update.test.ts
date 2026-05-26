@@ -21,6 +21,12 @@ vi.mock("@/lib/analytics", () => ({
   track: trackMock,
 }))
 
+vi.mock("@/lib/github-repo", () => ({
+  AUTO_UPDATE_ENABLED: true,
+  GITHUB_REPO: "ec812/openusage",
+  githubUrl: (path: string) => `https://github.com/ec812/openusage${path.startsWith("/") ? path : `/${path}`}`,
+}))
+
 import { useAppUpdate } from "@/hooks/use-app-update"
 
 declare global {
@@ -30,6 +36,7 @@ declare global {
 
 describe("useAppUpdate", () => {
   const originalIsTauri = globalThis.isTauri
+  const originalDev = import.meta.env.DEV
 
   beforeEach(() => {
     checkMock.mockReset()
@@ -37,6 +44,7 @@ describe("useAppUpdate", () => {
     trackMock.mockReset()
     // `@tauri-apps/api/core` considers `globalThis.isTauri` the runtime flag.
     globalThis.isTauri = true
+    import.meta.env.DEV = false
   })
 
   afterAll(() => {
@@ -45,6 +53,7 @@ describe("useAppUpdate", () => {
     } else {
       globalThis.isTauri = originalIsTauri
     }
+    import.meta.env.DEV = originalDev
   })
 
   it("starts checking on mount", async () => {

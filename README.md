@@ -6,7 +6,7 @@ See your usage at a glance from your menu bar. No digging through dashboards.
 
 ## Download
 
-[**Download the latest release**](https://github.com/robinebers/openusage/releases/latest) (macOS, Apple Silicon & Intel)
+[**Download the latest release**](https://github.com/ec812/openusage/releases/latest) (macOS, Apple Silicon & Intel)
 
 The app auto-updates. Install once and you're set.
 
@@ -28,7 +28,7 @@ OpenUsage lives in your menu bar and shows you how much of your AI coding subscr
 - [**Antigravity**](docs/providers/antigravity.md) / all models
 - [**Claude**](docs/providers/claude.md) / session, weekly, extra usage, local token usage (ccusage)
 - [**Codex**](docs/providers/codex.md) / session, weekly, reviews, credits
-- [**Command Code**](https://commandcode.ai/studio) / monthly credits, spend, tokens, models (`cmd login` or API key)
+- [**Command Code**](https://commandcode.ai/studio) / monthly credits (`cmd login` or API key)
 - [**Copilot**](docs/providers/copilot.md) / premium, chat, completions
 - [**Cursor**](docs/providers/cursor.md) / credits, total usage, auto usage, API usage, on-demand, CLI auth
 - [**Factory / Droid**](docs/providers/factory.md) / standard, premium tokens

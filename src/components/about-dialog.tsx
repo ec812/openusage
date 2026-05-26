@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { githubUrl } from "@/lib/github-repo";
 import { ChangelogDialog } from "./changelog-dialog";
 import { Button } from "@/components/ui/button";
 
@@ -114,7 +115,7 @@ export function AboutDialog({ version, onClose }: AboutDialogProps) {
           </p>
           <p>
             Open source on{" "}
-            <ExternalLink href="https://github.com/robinebers/openusage">
+            <ExternalLink href={githubUrl("")}>
               GitHub
             </ExternalLink>
           </p>

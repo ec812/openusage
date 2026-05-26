@@ -502,7 +502,6 @@ pub fn run() {
                 .level_for("hyper", log::LevelFilter::Warn)
                 .level_for("reqwest", log::LevelFilter::Warn)
                 .level_for("tao", log::LevelFilter::Info)
-                .level_for("tauri_plugin_updater", log::LevelFilter::Info)
                 .build(),
         )
         .plugin(tauri_plugin_process::init())
@@ -576,9 +575,6 @@ pub fn run() {
             local_http_api::start_server();
 
             tray::create(app.handle())?;
-
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
 
             // Register global shortcut from stored settings
             #[cfg(desktop)]

@@ -45,5 +45,6 @@ Use below list to store and recall user notes when asked to do so.
 
 - Use this list when asked to remember things. Keep each list item concise.
 - Local dev (hot reload, no full release build): `bun run tauri:dev` (or `bun tauri dev`). Vite on :1420; Rust recompiles on `src-tauri` changes. Dev shows a **Dock icon** (easier to find); release is menu-bar-only.
+- Auto-updater disabled (`AUTO_UPDATE_ENABLED` in `src/lib/github-repo.ts`) — no pulls from robinebers/openusage; enable after ec812 signed releases exist.
 - Tauri IPC: JS must use camelCase (`{ batchId, pluginIds }`), Tauri auto-converts to Rust's snake_case. Never send snake_case from JS—params silently won't match.
 - tauri-action `latest.json`: Parallel matrix builds are safe—action fetches existing `latest.json`, merges platform entries, re-uploads. No `max-parallel: 1` needed.

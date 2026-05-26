@@ -133,9 +133,7 @@ describe("command-code plugin", () => {
     ]);
     expect(manifest.lines).toEqual([
       { type: "progress", label: "Monthly credits", scope: "overview", primaryOrder: 1 },
-      { type: "text", label: "Total spent", scope: "overview" },
-      { type: "text", label: "Tokens used", scope: "detail" },
-      { type: "text", label: "Models", scope: "detail" },
+      { type: "text", label: "Resets in", scope: "overview" },
     ]);
   });
 
@@ -184,9 +182,9 @@ describe("command-code plugin", () => {
     expect(monthlyLine.type).toBe("progress");
     expect(Math.round(monthlyLine.used)).toBe(34);
 
-    var spentLine = result.lines.find(function (l) { return l.label === "Total spent"; });
-    expect(spentLine).toBeTruthy();
-    expect(spentLine.value).toContain("$3.41");
+    expect(result.lines.find(function (l) { return l.label === "Total spent"; })).toBeUndefined();
+    expect(result.lines.find(function (l) { return l.label === "Tokens used"; })).toBeUndefined();
+    expect(result.lines.find(function (l) { return l.label === "Models"; })).toBeUndefined();
   });
 
   it("includes Authorization header with bearer token", async () => {
@@ -202,41 +200,6 @@ describe("command-code plugin", () => {
       var headers = calls[i][0].headers;
       expect(headers.Authorization).toBe("Bearer my-secret-key");
     }
-  });
-
-  it("shows model breakdown in detail view", async () => {
-    var ctx = makePluginTestContext();
-    setAuth(ctx);
-    mockEndpoints(ctx, makeCreditsResponse(), makeUsageSummaryResponse(), makeSubscriptionResponse());
-
-    var plugin = await loadPlugin();
-    var result = plugin.probe(ctx);
-
-    var modelsLine = result.lines.find(function (l) { return l.label === "Models"; });
-    expect(modelsLine).toBeTruthy();
-    expect(modelsLine.value).toContain("deepseek-v4-pro");
-    expect(modelsLine.value).toContain("Kimi-K2.5");
-  });
-
-  it("handles empty models array gracefully", async () => {
-    var ctx = makePluginTestContext();
-    setAuth(ctx);
-    mockEndpoints(
-      ctx,
-      makeCreditsResponse(),
-      makeUsageSummaryResponse({ models: [] }),
-      makeSubscriptionResponse(),
-    );
-
-    var plugin = await loadPlugin();
-    var result = plugin.probe(ctx);
-
-    var modelsLine = result.lines.find(function (l) { return l.label === "Models"; });
-    expect(modelsLine).toBeUndefined();
-
-    // Should still show progress and text lines
-    expect(result.lines.length).toBeGreaterThanOrEqual(2);
-    expect(result.lines[0].type).toBe("progress");
   });
 
   it("handles API returning empty/minimal responses gracefully", async () => {
@@ -273,37 +236,6 @@ describe("command-code plugin", () => {
     var calls = ctx.host.http.request.mock.calls;
     var firstCall = calls[0];
     expect(firstCall[0].headers.Authorization).toBe("Bearer env-override-key");
-  });
-
-  it("shows token count from usage summary", async () => {
-    var ctx = makePluginTestContext();
-    setAuth(ctx);
-    mockEndpoints(ctx, makeCreditsResponse(), makeUsageSummaryResponse(), makeSubscriptionResponse());
-
-    var plugin = await loadPlugin();
-    var result = plugin.probe(ctx);
-
-    var tokensLine = result.lines.find(function (l) { return l.label === "Tokens used"; });
-    expect(tokensLine).toBeTruthy();
-    // 43,770,345 → "44M" tokens
-    expect(tokensLine.value).toMatch(/^\d+[KM]?$/);
-  });
-
-  it("handles zero totalCost gracefully", async () => {
-    var ctx = makePluginTestContext();
-    setAuth(ctx);
-    mockEndpoints(
-      ctx,
-      makeCreditsResponse(),
-      makeUsageSummaryResponse({ totalCost: 0, totalMonthlyCredits: 0, models: [] }),
-      makeSubscriptionResponse(),
-    );
-
-    var plugin = await loadPlugin();
-    var result = plugin.probe(ctx);
-
-    var spentLine = result.lines.find(function (l) { return l.label === "Total spent"; });
-    expect(spentLine).toBeUndefined();
   });
 
   it("clamps usage percentage at 100", async () => {
