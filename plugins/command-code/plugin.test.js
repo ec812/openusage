@@ -133,7 +133,6 @@ describe("command-code plugin", () => {
     ]);
     expect(manifest.lines).toEqual([
       { type: "progress", label: "Monthly credits", scope: "overview", primaryOrder: 1 },
-      { type: "text", label: "Resets in", scope: "overview" },
     ]);
   });
 
@@ -258,24 +257,24 @@ describe("command-code plugin", () => {
     expect(monthlyLine.used).toBe(100);
   });
 
-  it("shows days remaining until reset", async () => {
+  it("sets resetsAt on progress when billing period end is available", async () => {
     var ctx = makePluginTestContext();
     setAuth(ctx);
-    // Set billing period to 10 days from now
     var futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + 10);
+    var periodEnd = futureDate.toISOString();
     mockEndpoints(
       ctx,
       makeCreditsResponse(),
       makeUsageSummaryResponse(),
-      makeSubscriptionResponse({ currentPeriodEnd: futureDate.toISOString() }),
+      makeSubscriptionResponse({ currentPeriodEnd: periodEnd }),
     );
 
     var plugin = await loadPlugin();
     var result = plugin.probe(ctx);
 
-    var resetsLine = result.lines.find(function (l) { return l.label === "Resets in"; });
-    expect(resetsLine).toBeTruthy();
-    expect(resetsLine.value).toContain("days");
+    var monthlyLine = result.lines.find(function (l) { return l.label === "Monthly credits"; });
+    expect(monthlyLine.resetsAt).toBe(periodEnd);
+    expect(result.lines.find(function (l) { return l.label === "Resets in"; })).toBeUndefined();
   });
 });

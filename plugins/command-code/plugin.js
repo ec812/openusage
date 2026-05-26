@@ -151,17 +151,6 @@
       lines.push(ctx.line.progress(progressOpts))
     }
 
-    // -- Text: Days remaining until reset --
-    if (billingPeriodEnd && !isNaN(billingPeriodEnd.getTime())) {
-      var now = new Date()
-      var msRemaining = billingPeriodEnd.getTime() - now.getTime()
-      var daysRemaining = Math.max(0, Math.ceil(msRemaining / (24 * 60 * 60 * 1000)))
-      lines.push(ctx.line.text({
-        label: "Resets in",
-        value: daysRemaining + " days",
-      }))
-    }
-
     return { plan: planLabel, lines: lines }
   }
 

@@ -10,7 +10,6 @@
     { "label": "Studio", "url": "https://commandcode.ai/studio" }
   ],
   "lines": [
-    { "type": "progress", "label": "Monthly credits", "scope": "overview", "primaryOrder": 1 },
-    { "type": "text", "label": "Resets in", "scope": "overview" }
+    { "type": "progress", "label": "Monthly credits", "scope": "overview", "primaryOrder": 1 }
   ]
 }
