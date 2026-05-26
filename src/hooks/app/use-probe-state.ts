@@ -16,19 +16,6 @@ export function useProbeState({ onProbeResult }: UseProbeStateArgs) {
 
   const manualRefreshIdsRef = useRef<Set<string>>(new Set())
 
-  const updatePluginStates = useCallback(
-    (
-      updater: (
-        previousStates: Record<string, PluginState>
-      ) => Record<string, PluginState>
-    ) => {
-      const nextStates = updater(pluginStatesRef.current)
-      pluginStatesRef.current = nextStates
-      setPluginStates(nextStates)
-    },
-    []
-  )
-
   const getErrorMessage = useCallback((output: PluginOutput) => {
     if (output.lines.length !== 1) return null
     const line = output.lines[0]
@@ -39,7 +26,7 @@ export function useProbeState({ onProbeResult }: UseProbeStateArgs) {
   }, [])
 
   const setLoadingForPlugins = useCallback((ids: string[]) => {
-    updatePluginStates((prev) => {
+    setPluginStates((prev) => {
       const next = { ...prev }
       for (const id of ids) {
         const existing = prev[id]
@@ -53,10 +40,10 @@ export function useProbeState({ onProbeResult }: UseProbeStateArgs) {
       }
       return next
     })
-  }, [updatePluginStates])
+  }, [])
 
   const setErrorForPlugins = useCallback((ids: string[], error: string) => {
-    updatePluginStates((prev) => {
+    setPluginStates((prev) => {
       const next = { ...prev }
       for (const id of ids) {
         const existing = prev[id]
@@ -70,7 +57,7 @@ export function useProbeState({ onProbeResult }: UseProbeStateArgs) {
       }
       return next
     })
-  }, [updatePluginStates])
+  }, [])
 
   const handleProbeResult = useCallback(
     (output: PluginOutput) => {
@@ -81,7 +68,7 @@ export function useProbeState({ onProbeResult }: UseProbeStateArgs) {
       }
 
       const now = Date.now()
-      updatePluginStates((prev) => {
+      setPluginStates((prev) => {
         const existing = prev[output.providerId]
         return {
           ...prev,
@@ -99,7 +86,7 @@ export function useProbeState({ onProbeResult }: UseProbeStateArgs) {
 
       onProbeResult?.()
     },
-    [getErrorMessage, onProbeResult, updatePluginStates]
+    [getErrorMessage, onProbeResult]
   )
 
   return {

@@ -8,7 +8,7 @@ mod tray;
 #[cfg(target_os = "macos")]
 mod webkit_config;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -25,11 +25,6 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 const GLOBAL_SHORTCUT_STORE_KEY: &str = "globalShortcut";
 const DAILY_ACTIVE_TRACKED_DAY_KEY: &str = "analytics.daily_active_day";
 const DAILY_ACTIVE_EVENT_NAME: &str = "app_started";
-const MAX_CONCURRENT_PROBES: usize = 4;
-
-fn probe_worker_count(plugin_count: usize) -> usize {
-    plugin_count.min(MAX_CONCURRENT_PROBES)
-}
 
 fn today_utc_ymd() -> String {
     let date = time::OffsetDateTime::now_utc().date();
@@ -287,23 +282,8 @@ async fn start_probe_batch(
         });
     }
 
-    let selected_count = selected_plugins.len();
-    let worker_count = probe_worker_count(selected_count);
-    if worker_count < selected_count {
-        log::info!(
-            "probe batch {} using {} workers for {} plugins",
-            batch_id,
-            worker_count,
-            selected_count
-        );
-    }
-
-    let remaining = Arc::new(AtomicUsize::new(selected_count));
-    let probe_queue = Arc::new(Mutex::new(
-        selected_plugins.into_iter().collect::<VecDeque<_>>(),
-    ));
-
-    for _ in 0..worker_count {
+    let remaining = Arc::new(AtomicUsize::new(selected_plugins.len()));
+    for plugin in selected_plugins {
         let handle = app_handle.clone();
         let completion_handle = app_handle.clone();
         let bid = batch_id.clone();
@@ -311,63 +291,49 @@ async fn start_probe_batch(
         let data_dir = app_data_dir.clone();
         let version = app_version.clone();
         let counter = Arc::clone(&remaining);
-        let queue = Arc::clone(&probe_queue);
 
         tauri::async_runtime::spawn_blocking(move || {
-            loop {
-                let plugin = {
-                    let mut queue = queue
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    queue.pop_front()
-                };
+            let plugin_id = plugin.manifest.id.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                plugin_engine::runtime::run_probe(&plugin, &data_dir, &version)
+            }));
 
-                let Some(plugin) = plugin else {
-                    break;
-                };
-
-                let plugin_id = plugin.manifest.id.clone();
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    plugin_engine::runtime::run_probe(&plugin, &data_dir, &version)
-                }));
-
-                match result {
-                    Ok(output) => {
-                        let has_error = output.lines.iter().any(|line| {
-                            matches!(line, plugin_engine::runtime::MetricLine::Badge { label, .. } if label == "Error")
-                        });
-                        if has_error {
-                            log::warn!("probe {} completed with error", plugin_id);
-                        } else {
-                            log::info!(
-                                "probe {} completed ok ({} lines)",
-                                plugin_id,
-                                output.lines.len()
-                            );
-                            local_http_api::cache_successful_output(&output);
-                        }
-                        let _ = handle.emit(
-                            "probe:result",
-                            ProbeResult {
-                                batch_id: bid.clone(),
-                                output,
-                            },
+            match result {
+                Ok(output) => {
+                    let has_error = output.lines.iter().any(|line| {
+                        matches!(line, plugin_engine::runtime::MetricLine::Badge { label, .. } if label == "Error")
+                    });
+                    if has_error {
+                        log::warn!("probe {} completed with error", plugin_id);
+                    } else {
+                        log::info!(
+                            "probe {} completed ok ({} lines)",
+                            plugin_id,
+                            output.lines.len()
                         );
+                        local_http_api::cache_successful_output(&output);
                     }
-                    Err(_) => {
-                        log::error!("probe {} panicked", plugin_id);
-                    }
-                }
-
-                if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    log::info!("probe batch {} complete", completion_bid);
-                    let _ = completion_handle.emit(
-                        "probe:batch-complete",
-                        ProbeBatchComplete {
-                            batch_id: completion_bid.clone(),
+                    let _ = handle.emit(
+                        "probe:result",
+                        ProbeResult {
+                            batch_id: bid,
+                            output,
                         },
                     );
                 }
+                Err(_) => {
+                    log::error!("probe {} panicked", plugin_id);
+                }
+            }
+
+            if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+                log::info!("probe batch {} complete", completion_bid);
+                let _ = completion_handle.emit(
+                    "probe:batch-complete",
+                    ProbeBatchComplete {
+                        batch_id: completion_bid,
+                    },
+                );
             }
         });
     }
@@ -386,6 +352,22 @@ fn get_log_path(app_handle: tauri::AppHandle) -> Result<String, String> {
     let log_dir = home.join("Library").join("Logs").join(&bundle_id);
     let log_file = log_dir.join(format!("{}.log", app_handle.package_info().name));
     Ok(log_file.to_string_lossy().to_string())
+}
+
+/// Resolve a bundled resource path when `resource_dir` is unavailable (e.g. `tauri dev`).
+#[tauri::command]
+fn resolve_app_resource_path(relative_path: String) -> Result<String, String> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let candidates = [
+        manifest_dir.join(&relative_path),
+        manifest_dir.join("resources").join(&relative_path),
+    ];
+    for path in candidates {
+        if path.exists() {
+            return Ok(path.to_string_lossy().to_string());
+        }
+    }
+    Err(format!("resource not found: {relative_path}"))
 }
 
 /// Update the global shortcut registration.
@@ -533,10 +515,16 @@ pub fn run() {
             start_probe_batch,
             list_plugins,
             get_log_path,
-            update_global_shortcut
+            update_global_shortcut,
+            resolve_app_resource_path
         ])
         .setup(|app| {
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", debug_assertions))]
+            {
+                // Dev runs as a bare binary (no .app bundle). Show Dock icon so the app is findable.
+                app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            }
+            #[cfg(all(target_os = "macos", not(debug_assertions)))]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             #[cfg(target_os = "macos")]
@@ -558,7 +546,11 @@ pub fn run() {
             spawn_daily_active_rollover_tracker(app.handle().clone());
 
             let app_data_dir = app.path().app_data_dir().expect("no app data dir");
-            let resource_dir = app.path().resource_dir().expect("no resource dir");
+            // `tauri dev` runs via `cargo run` — no app bundle, so resource_dir is missing.
+            let resource_dir = app
+                .path()
+                .resource_dir()
+                .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
             let app_data_dir_tail = app_data_dir
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -624,19 +616,13 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_, event| match event {
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                local_http_api::flush_cache();
-            }
-            _ => {}
-        });
+        .run(|_, _| {});
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        DAILY_ACTIVE_TRACKED_DAY_KEY, MAX_CONCURRENT_PROBES, probe_worker_count,
-        seconds_until_next_utc_day, should_track_daily_active,
+        DAILY_ACTIVE_TRACKED_DAY_KEY, seconds_until_next_utc_day, should_track_daily_active,
     };
     use time::{Date, Month, PrimitiveDateTime, Time};
 
@@ -671,19 +657,5 @@ mod tests {
         .assume_utc();
 
         assert_eq!(seconds_until_next_utc_day(now), 10);
-    }
-
-    #[test]
-    fn probe_worker_count_is_bounded() {
-        assert_eq!(probe_worker_count(0), 0);
-        assert_eq!(probe_worker_count(1), 1);
-        assert_eq!(
-            probe_worker_count(MAX_CONCURRENT_PROBES),
-            MAX_CONCURRENT_PROBES
-        );
-        assert_eq!(
-            probe_worker_count(MAX_CONCURRENT_PROBES + 1),
-            MAX_CONCURRENT_PROBES
-        );
     }
 }

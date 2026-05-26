@@ -1,4 +1,7 @@
-# OpenUsage
+|# OpenUsage (ec812 fork)
+|
+|**This is our own fork of robinebers/openusage.** Upstream remote removed. No syncs, no merge conflicts, no update failures.
+|We only maintain `plugins/command-code`. Everything else is left as-is from the fork point.
 
 ## Instructions
 - CRITICAL: Use simple, concise language. Avoid overtechnical jargon.
@@ -25,6 +28,11 @@
 - Expected issues: explicit result types (not throw/try/catch).
 - Unexpected issues: fail LOUD (throw/console.error + toast.error); NEVER add silent fallbacks.
 
+## This is our own fork
+- **Upstream (robinebers/openusage) remote has been removed.** No syncs, no merge conflicts.
+- We only actively maintain `plugins/command-code`. Other plugins left as-is.
+- PRs go to ec812/openusage main branch only — no upstream contributions.
+
 ## Before Creating Pull Request
 - Before creating a PR or pushing to main, ensure that `README.md` is updated with what plugins are supported.
 - On any plugin change/new plugin, audit plugin-exposed request/response fields against `src-tauri/src/plugin_engine/host_api.rs` redaction lists and add/update tests for gaps. Compare with existing plugins for patterns.
@@ -36,5 +44,6 @@
 Use below list to store and recall user notes when asked to do so.
 
 - Use this list when asked to remember things. Keep each list item concise.
+- Local dev (hot reload, no full release build): `bun run tauri:dev` (or `bun tauri dev`). Vite on :1420; Rust recompiles on `src-tauri` changes. Dev shows a **Dock icon** (easier to find); release is menu-bar-only.
 - Tauri IPC: JS must use camelCase (`{ batchId, pluginIds }`), Tauri auto-converts to Rust's snake_case. Never send snake_case from JS—params silently won't match.
 - tauri-action `latest.json`: Parallel matrix builds are safe—action fetches existing `latest.json`, merges platform entries, re-uploads. No `max-parallel: 1` needed.

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::path::BaseDirectory;
@@ -44,11 +46,17 @@ fn set_stored_log_level(app_handle: &AppHandle, level: log::LevelFilter) {
     log::set_max_level(level);
 }
 
-pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
-    let tray_icon_path = app_handle
+fn resolve_resource_path(app_handle: &AppHandle, relative: &str) -> tauri::Result<PathBuf> {
+    app_handle
         .path()
-        .resolve("icons/tray-icon.png", BaseDirectory::Resource)?;
-    let icon = Image::from_path(tray_icon_path)?;
+        .resolve(relative, BaseDirectory::Resource)
+        .or_else(|_| Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)))
+}
+
+pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
+    let tray_icon_path = resolve_resource_path(app_handle, "icons/tray-icon.png")?;
+    log::info!("Creating menu bar tray icon from {}", tray_icon_path.display());
+    let icon = Image::from_path(&tray_icon_path)?;
 
     // Load persisted log level
     let current_level = get_stored_log_level(app_handle);

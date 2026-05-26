@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { resolveResource } from "@tauri-apps/api/path"
+import { resolveAppResource } from "@/lib/app-resource"
 import { TrayIcon } from "@tauri-apps/api/tray"
 import type { PluginMeta } from "@/lib/plugin-types"
 import type { DisplayMode, MenubarIconStyle, PluginSettings } from "@/lib/settings"
@@ -330,7 +330,7 @@ export function useTrayIcon({
         trayInitializedRef.current = true
 
         try {
-          trayGaugeIconPathRef.current = await resolveResource("icons/tray-icon.png")
+          trayGaugeIconPathRef.current = await resolveAppResource("icons/tray-icon.png")
         } catch (e) {
           console.error("Failed to resolve tray gauge icon resource:", e)
         }

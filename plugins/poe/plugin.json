@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "poe",
+  "name": "Poe",
+  "version": "0.0.1",
+  "entry": "plugin.js",
+  "icon": "icon.svg",
+  "brandColor": "#6C47FF",
+  "links": [
+    { "label": "Dashboard", "url": "https://poe.com/settings?tab=subscription" }
+  ],
+  "lines": [
+    { "type": "progress", "label": "Monthly credits", "scope": "overview", "primaryOrder": 1 },
+    { "type": "text", "label": "Credits", "scope": "overview" },
+    { "type": "text", "label": "Daily budget", "scope": "overview" }
+  ]
+}

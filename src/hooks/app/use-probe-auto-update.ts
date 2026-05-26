@@ -10,7 +10,6 @@ type UseProbeAutoUpdateArgs = {
   autoUpdateInterval: AutoUpdateIntervalMinutes
   setLoadingForPlugins: (ids: string[]) => void
   setErrorForPlugins: (ids: string[], error: string) => void
-  isPluginLoading: (id: string) => boolean
   startBatch: (pluginIds?: string[]) => Promise<string[] | undefined>
 }
 
@@ -19,7 +18,6 @@ export function useProbeAutoUpdate({
   autoUpdateInterval,
   setLoadingForPlugins,
   setErrorForPlugins,
-  isPluginLoading,
   startBatch,
 }: UseProbeAutoUpdateArgs) {
   const [autoUpdateNextAt, setAutoUpdateNextAt] = useState<number | null>(null)
@@ -42,16 +40,10 @@ export function useProbeAutoUpdate({
     scheduleNext()
 
     const interval = setInterval(() => {
-      const idleIds = enabledIds.filter((id) => !isPluginLoading(id))
-      if (idleIds.length === 0) {
-        scheduleNext()
-        return
-      }
-
-      setLoadingForPlugins(idleIds)
-      startBatch(idleIds).catch((error) => {
+      setLoadingForPlugins(enabledIds)
+      startBatch(enabledIds).catch((error) => {
         console.error("Failed to start auto-update batch:", error)
-        setErrorForPlugins(idleIds, "Failed to start probe")
+        setErrorForPlugins(enabledIds, "Failed to start probe")
       })
       scheduleNext()
     }, intervalMs)
@@ -61,7 +53,6 @@ export function useProbeAutoUpdate({
     autoUpdateInterval,
     autoUpdateResetToken,
     pluginSettings,
-    isPluginLoading,
     setLoadingForPlugins,
     setErrorForPlugins,
     startBatch,

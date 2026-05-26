@@ -1,9 +1,9 @@
 use aes_gcm::{
-    aead::{generic_array::typenum::U16, rand_core::RngCore, Aead, KeyInit, OsRng},
-    aes::Aes256,
     AesGcm, Nonce,
+    aead::{Aead, KeyInit, OsRng, generic_array::typenum::U16, rand_core::RngCore},
+    aes::Aes256,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use rquickjs::{Ctx, Exception, Function, Object};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -11,9 +11,8 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
-const WHITELISTED_ENV_VARS: [&str; 16] = [
+const WHITELISTED_ENV_VARS: [&str; 18] = [
     "CODEX_HOME",
     "CLAUDE_CONFIG_DIR",
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -30,54 +29,9 @@ const WHITELISTED_ENV_VARS: [&str; 16] = [
     "MINIMAX_CN_API_KEY",
     "SYNTHETIC_API_KEY",
     "PI_CODING_AGENT_DIR",
+    "COMMAND_CODE_API_KEY",
+    "POE_API_KEY",
 ];
-const MIN_BLOCKING_TIMEOUT: Duration = Duration::from_millis(1);
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ProbeDeadline {
-    expires_at: Option<Instant>,
-}
-
-impl ProbeDeadline {
-    #[cfg(test)]
-    pub(crate) fn none() -> Self {
-        Self { expires_at: None }
-    }
-
-    pub(crate) fn at(expires_at: Instant) -> Self {
-        Self {
-            expires_at: Some(expires_at),
-        }
-    }
-
-    pub(crate) fn has_elapsed(self) -> bool {
-        self.expires_at
-            .map(|expires_at| Instant::now() >= expires_at)
-            .unwrap_or(false)
-    }
-
-    fn clamp_duration(self, requested: Duration) -> Option<Duration> {
-        let Some(expires_at) = self.expires_at else {
-            return Some(requested);
-        };
-        let remaining = expires_at
-            .checked_duration_since(Instant::now())
-            .filter(|remaining| *remaining >= MIN_BLOCKING_TIMEOUT)?;
-        Some(requested.min(remaining))
-    }
-}
-
-fn log_probe_deadline_skip(plugin_id: &str, operation: &str) {
-    log::warn!(
-        "[plugin:{}] {} skipped: probe timed out",
-        plugin_id,
-        operation
-    );
-}
-
-fn probe_timeout_error<'js>(ctx: &Ctx<'js>) -> rquickjs::Error {
-    Exception::throw_message(ctx, "probe timed out")
-}
 
 fn last_non_empty_trimmed_line(text: &str) -> Option<String> {
     text.lines()
@@ -559,28 +513,11 @@ fn encrypt_aes_256_gcm_envelope(plaintext: &str, key_b64: &str) -> Result<String
     ))
 }
 
-#[cfg(test)]
-pub(crate) fn inject_host_api<'js>(
+pub fn inject_host_api<'js>(
     ctx: &Ctx<'js>,
     plugin_id: &str,
     app_data_dir: &PathBuf,
     app_version: &str,
-) -> rquickjs::Result<()> {
-    inject_host_api_with_deadline(
-        ctx,
-        plugin_id,
-        app_data_dir,
-        app_version,
-        ProbeDeadline::none(),
-    )
-}
-
-pub(crate) fn inject_host_api_with_deadline<'js>(
-    ctx: &Ctx<'js>,
-    plugin_id: &str,
-    app_data_dir: &PathBuf,
-    app_version: &str,
-    deadline: ProbeDeadline,
 ) -> rquickjs::Result<()> {
     let globals = ctx.globals();
     let probe_ctx = Object::new(ctx.clone())?;
@@ -610,11 +547,11 @@ pub(crate) fn inject_host_api_with_deadline<'js>(
     inject_fs(ctx, &host)?;
     inject_crypto(ctx, &host)?;
     inject_env(ctx, &host, plugin_id)?;
-    inject_http(ctx, &host, plugin_id, deadline)?;
+    inject_http(ctx, &host, plugin_id)?;
     inject_keychain(ctx, &host, plugin_id)?;
     inject_sqlite(ctx, &host)?;
     inject_ls(ctx, &host, plugin_id)?;
-    inject_ccusage(ctx, &host, plugin_id, deadline)?;
+    inject_ccusage(ctx, &host, plugin_id)?;
 
     probe_ctx.set("host", host)?;
     globals.set("__openusage_ctx", probe_ctx)?;
@@ -785,12 +722,7 @@ fn inject_env<'js>(ctx: &Ctx<'js>, host: &Object<'js>, _plugin_id: &str) -> rqui
     Ok(())
 }
 
-fn inject_http<'js>(
-    ctx: &Ctx<'js>,
-    host: &Object<'js>,
-    plugin_id: &str,
-    deadline: ProbeDeadline,
-) -> rquickjs::Result<()> {
+fn inject_http<'js>(ctx: &Ctx<'js>, host: &Object<'js>, plugin_id: &str) -> rquickjs::Result<()> {
     let http_obj = Object::new(ctx.clone())?;
     let pid = plugin_id.to_string();
 
@@ -802,10 +734,6 @@ fn inject_http<'js>(
                 let req: HttpReqParams = serde_json::from_str(&req_json).map_err(|e| {
                     Exception::throw_message(&ctx_inner, &format!("invalid request: {}", e))
                 })?;
-
-                if deadline.has_elapsed() {
-                    return Err(Exception::throw_message(&ctx_inner, "probe timed out"));
-                }
 
                 let method_str = req.method.as_deref().unwrap_or("GET");
                 let redacted_url = redact_url(&req.url);
@@ -832,13 +760,9 @@ fn inject_http<'js>(
                 }
 
                 let timeout_ms = req.timeout_ms.unwrap_or(10_000);
-                let Some(timeout) = deadline.clamp_duration(Duration::from_millis(timeout_ms))
-                else {
-                    return Err(probe_timeout_error(&ctx_inner));
-                };
                 let mut builder = reqwest::blocking::Client::builder()
-                    .timeout(timeout)
-                    .connect_timeout(timeout)
+                    .timeout(std::time::Duration::from_millis(timeout_ms))
+                    .connect_timeout(std::time::Duration::from_millis(timeout_ms))
                     .redirect(reqwest::redirect::Policy::none());
 
                 // Apply pre-resolved proxy (localhost bypass already configured)
@@ -1545,13 +1469,9 @@ fn ls_parse_listening_ports(output: &str) -> Vec<i32> {
     ports.into_iter().collect()
 }
 
-const CCUSAGE_VERSION: &str = "20.0.2";
-const CCUSAGE_PACKAGE_NAME: &str = "ccusage";
-const CCUSAGE_BIN_NAME: &str = "ccusage";
-const CCUSAGE_LEGACY_VERSION: &str = "18.0.11";
-const CCUSAGE_LEGACY_CLAUDE_PACKAGE_NAME: &str = "ccusage";
-const CCUSAGE_LEGACY_CODEX_PACKAGE_NAME: &str = "@ccusage/codex";
-const CCUSAGE_LEGACY_CODEX_BIN_NAME: &str = "ccusage-codex";
+const CCUSAGE_VERSION: &str = "18.0.10";
+const CCUSAGE_CLAUDE_PACKAGE_NAME: &str = "ccusage";
+const CCUSAGE_CODEX_PACKAGE_NAME: &str = "@ccusage/codex";
 const CCUSAGE_TIMEOUT_SECS: u64 = 15;
 const CCUSAGE_POLL_INTERVAL_MS: u64 = 100;
 
@@ -1605,12 +1525,6 @@ enum CcusageRunnerKind {
     Npx,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum CcusageCommandFlavor {
-    Current,
-    Legacy,
-}
-
 fn ccusage_runner_order() -> [CcusageRunnerKind; 5] {
     [
         CcusageRunnerKind::Bunx,
@@ -1633,7 +1547,8 @@ fn ccusage_runner_label(kind: CcusageRunnerKind) -> &'static str {
 
 #[derive(Copy, Clone)]
 struct CcusageProviderConfig {
-    command_namespace: &'static str,
+    package_name: &'static str,
+    npm_exec_bin: &'static str,
     home_env_var: &'static str,
 }
 
@@ -1660,26 +1575,21 @@ fn resolve_ccusage_provider(opts: &CcusageQueryOpts, plugin_id: &str) -> Ccusage
 fn ccusage_provider_config(provider: CcusageProvider) -> CcusageProviderConfig {
     match provider {
         CcusageProvider::Claude => CcusageProviderConfig {
-            command_namespace: "claude",
+            package_name: CCUSAGE_CLAUDE_PACKAGE_NAME,
+            npm_exec_bin: "ccusage",
             home_env_var: "CLAUDE_CONFIG_DIR",
         },
         CcusageProvider::Codex => CcusageProviderConfig {
-            command_namespace: "codex",
+            package_name: CCUSAGE_CODEX_PACKAGE_NAME,
+            npm_exec_bin: "ccusage-codex",
             home_env_var: "CODEX_HOME",
         },
     }
 }
 
-fn ccusage_package_spec() -> String {
-    format!("{}@{}", CCUSAGE_PACKAGE_NAME, CCUSAGE_VERSION)
-}
-
-fn ccusage_legacy_package_spec(provider: CcusageProvider) -> String {
-    let package_name = match provider {
-        CcusageProvider::Claude => CCUSAGE_LEGACY_CLAUDE_PACKAGE_NAME,
-        CcusageProvider::Codex => CCUSAGE_LEGACY_CODEX_PACKAGE_NAME,
-    };
-    format!("{}@{}", package_name, CCUSAGE_LEGACY_VERSION)
+fn ccusage_package_spec(provider: CcusageProvider) -> String {
+    let config = ccusage_provider_config(provider);
+    format!("{}@{}", config.package_name, CCUSAGE_VERSION)
 }
 
 fn ccusage_home_override<'a>(
@@ -1758,30 +1668,12 @@ fn ccusage_runner_candidates(kind: CcusageRunnerKind) -> Vec<String> {
     unique
 }
 
-fn nvm_default_bin_path(home: &Path) -> Option<PathBuf> {
-    let alias_path = home.join(".nvm/alias/default");
-    let version = std::fs::read_to_string(&alias_path).ok()?;
-    let version = version.trim();
-    if version.is_empty() {
-        return None;
-    }
-    let version = if version.starts_with('v') {
-        version.to_string()
-    } else {
-        format!("v{version}")
-    };
-    Some(home.join(".nvm/versions/node").join(version).join("bin"))
-}
-
 fn ccusage_path_entries_with(home: Option<&Path>, existing_path: Option<&OsStr>) -> Vec<PathBuf> {
     let mut entries: Vec<PathBuf> = Vec::new();
 
     if let Some(home) = home {
         entries.push(home.join(".bun/bin"));
         entries.push(home.join(".nvm/current/bin"));
-        if let Some(nvm_bin) = nvm_default_bin_path(home) {
-            entries.push(nvm_bin);
-        }
         entries.push(home.join(".local/bin"));
     }
 
@@ -1884,16 +1776,7 @@ fn collect_ccusage_runners() -> Vec<(CcusageRunnerKind, String)> {
     collect_ccusage_runners_with(resolve_ccusage_runner_binary)
 }
 
-fn append_ccusage_common_args(
-    args: &mut Vec<String>,
-    opts: &CcusageQueryOpts,
-    provider: CcusageProvider,
-    flavor: CcusageCommandFlavor,
-) {
-    let config = ccusage_provider_config(provider);
-    if flavor == CcusageCommandFlavor::Current {
-        args.push(config.command_namespace.to_string());
-    }
+fn append_ccusage_common_args(args: &mut Vec<String>, opts: &CcusageQueryOpts) {
     args.extend([
         "daily".to_string(),
         "--json".to_string(),
@@ -1926,17 +1809,9 @@ fn ccusage_runner_args(
     kind: CcusageRunnerKind,
     opts: &CcusageQueryOpts,
     provider: CcusageProvider,
-    flavor: CcusageCommandFlavor,
 ) -> Vec<String> {
-    let package_spec = match flavor {
-        CcusageCommandFlavor::Current => ccusage_package_spec(),
-        CcusageCommandFlavor::Legacy => ccusage_legacy_package_spec(provider),
-    };
-    let npm_exec_bin = match (flavor, provider) {
-        (CcusageCommandFlavor::Current, _) => CCUSAGE_BIN_NAME,
-        (CcusageCommandFlavor::Legacy, CcusageProvider::Claude) => CCUSAGE_BIN_NAME,
-        (CcusageCommandFlavor::Legacy, CcusageProvider::Codex) => CCUSAGE_LEGACY_CODEX_BIN_NAME,
-    };
+    let config = ccusage_provider_config(provider);
+    let package_spec = ccusage_package_spec(provider);
     let mut args: Vec<String> = match kind {
         CcusageRunnerKind::Bunx => vec!["--silent".to_string(), package_spec.clone()],
         CcusageRunnerKind::PnpmDlx => {
@@ -1950,12 +1825,12 @@ fn ccusage_runner_args(
             "--yes".to_string(),
             format!("--package={package_spec}"),
             "--".to_string(),
-            npm_exec_bin.to_string(),
+            config.npm_exec_bin.to_string(),
         ],
         CcusageRunnerKind::Npx => vec!["--yes".to_string(), package_spec],
     };
 
-    append_ccusage_common_args(&mut args, opts, provider, flavor);
+    append_ccusage_common_args(&mut args, opts);
     args
 }
 
@@ -2050,7 +1925,6 @@ fn format_ccusage_timeout(timeout: std::time::Duration) -> String {
     format!("{:.3}s", timeout.as_secs_f64())
 }
 
-#[cfg(test)]
 fn run_ccusage_with_runner(
     kind: CcusageRunnerKind,
     program: &str,
@@ -2058,65 +1932,14 @@ fn run_ccusage_with_runner(
     provider: CcusageProvider,
     plugin_id: &str,
 ) -> CcusageRunnerResult {
-    run_ccusage_with_runner_deadline(
+    run_ccusage_with_runner_timeout(
         kind,
         program,
         opts,
         provider,
         plugin_id,
-        ProbeDeadline::none(),
+        std::time::Duration::from_secs(CCUSAGE_TIMEOUT_SECS),
     )
-}
-
-fn run_ccusage_with_runner_deadline(
-    kind: CcusageRunnerKind,
-    program: &str,
-    opts: &CcusageQueryOpts,
-    provider: CcusageProvider,
-    plugin_id: &str,
-    deadline: ProbeDeadline,
-) -> CcusageRunnerResult {
-    if deadline.has_elapsed() {
-        log::warn!("[plugin:{}] ccusage skipped: probe timed out", plugin_id);
-        return CcusageRunnerResult::TimedOut;
-    }
-
-    let Some(current_timeout) = deadline.clamp_duration(Duration::from_secs(CCUSAGE_TIMEOUT_SECS))
-    else {
-        log_probe_deadline_skip(plugin_id, "ccusage");
-        return CcusageRunnerResult::TimedOut;
-    };
-
-    let current = run_ccusage_with_runner_timeout(
-        kind,
-        program,
-        opts,
-        provider,
-        plugin_id,
-        CcusageCommandFlavor::Current,
-        current_timeout,
-    );
-    match current {
-        CcusageRunnerResult::Failed if deadline.has_elapsed() => CcusageRunnerResult::TimedOut,
-        CcusageRunnerResult::Failed => {
-            let Some(legacy_timeout) =
-                deadline.clamp_duration(Duration::from_secs(CCUSAGE_TIMEOUT_SECS))
-            else {
-                log_probe_deadline_skip(plugin_id, "ccusage legacy fallback");
-                return CcusageRunnerResult::TimedOut;
-            };
-            run_ccusage_with_runner_timeout(
-                kind,
-                program,
-                opts,
-                provider,
-                plugin_id,
-                CcusageCommandFlavor::Legacy,
-                legacy_timeout,
-            )
-        }
-        other => other,
-    }
 }
 
 fn run_ccusage_with_runner_timeout(
@@ -2125,10 +1948,9 @@ fn run_ccusage_with_runner_timeout(
     opts: &CcusageQueryOpts,
     provider: CcusageProvider,
     plugin_id: &str,
-    flavor: CcusageCommandFlavor,
     timeout: std::time::Duration,
 ) -> CcusageRunnerResult {
-    let args = ccusage_runner_args(kind, opts, provider, flavor);
+    let args = ccusage_runner_args(kind, opts, provider);
     let enriched_path = ccusage_enriched_path();
     let mut command = std::process::Command::new(program);
     configure_ccusage_command(&mut command, &args, enriched_path.as_deref());
@@ -2141,10 +1963,9 @@ fn run_ccusage_with_runner_timeout(
     let redacted_program = redact_log_message(program);
 
     log::info!(
-        "[plugin:{}] ccusage query via {} {:?} ({})",
+        "[plugin:{}] ccusage query via {} ({})",
         plugin_id,
         ccusage_runner_label(kind),
-        flavor,
         redacted_program
     );
 
@@ -2312,7 +2133,6 @@ fn inject_ccusage<'js>(
     ctx: &Ctx<'js>,
     host: &Object<'js>,
     plugin_id: &str,
-    deadline: ProbeDeadline,
 ) -> rquickjs::Result<()> {
     let ccusage_obj = Object::new(ctx.clone())?;
     let pid = plugin_id.to_string();
@@ -2340,11 +2160,7 @@ fn inject_ccusage<'js>(
                     &opts,
                     provider,
                     &pid,
-                    |kind, program, opts, provider, plugin_id| {
-                        run_ccusage_with_runner_deadline(
-                            kind, program, opts, provider, plugin_id, deadline,
-                        )
-                    },
+                    run_ccusage_with_runner,
                 ))
             },
         )?,
@@ -3525,22 +3341,15 @@ mod tests {
             home_path: None,
             claude_path: None,
         };
-        let expected_ccusage_package = ccusage_package_spec();
-        assert_eq!(expected_ccusage_package, "ccusage@20.0.2");
-        let expected_npm_exec_package = format!("--package={expected_ccusage_package}");
+        let expected_claude_package = ccusage_package_spec(CcusageProvider::Claude);
+        let expected_npm_exec_package = format!("--package={expected_claude_package}");
 
-        let bunx = ccusage_runner_args(
-            CcusageRunnerKind::Bunx,
-            &opts,
-            CcusageProvider::Claude,
-            CcusageCommandFlavor::Current,
-        );
+        let bunx = ccusage_runner_args(CcusageRunnerKind::Bunx, &opts, CcusageProvider::Claude);
         assert_eq!(
             bunx,
             vec![
                 "--silent",
-                expected_ccusage_package.as_str(),
-                "claude",
+                expected_claude_package.as_str(),
                 "daily",
                 "--json",
                 "--order",
@@ -3552,19 +3361,13 @@ mod tests {
             ]
         );
 
-        let pnpm = ccusage_runner_args(
-            CcusageRunnerKind::PnpmDlx,
-            &opts,
-            CcusageProvider::Claude,
-            CcusageCommandFlavor::Current,
-        );
+        let pnpm = ccusage_runner_args(CcusageRunnerKind::PnpmDlx, &opts, CcusageProvider::Claude);
         assert_eq!(
             pnpm,
             vec![
                 "-s",
                 "dlx",
-                expected_ccusage_package.as_str(),
-                "claude",
+                expected_claude_package.as_str(),
                 "daily",
                 "--json",
                 "--order",
@@ -3576,19 +3379,13 @@ mod tests {
             ]
         );
 
-        let yarn = ccusage_runner_args(
-            CcusageRunnerKind::YarnDlx,
-            &opts,
-            CcusageProvider::Claude,
-            CcusageCommandFlavor::Current,
-        );
+        let yarn = ccusage_runner_args(CcusageRunnerKind::YarnDlx, &opts, CcusageProvider::Claude);
         assert_eq!(
             yarn,
             vec![
                 "dlx",
                 "-q",
-                expected_ccusage_package.as_str(),
-                "claude",
+                expected_claude_package.as_str(),
                 "daily",
                 "--json",
                 "--order",
@@ -3600,12 +3397,8 @@ mod tests {
             ]
         );
 
-        let npm_exec = ccusage_runner_args(
-            CcusageRunnerKind::NpmExec,
-            &opts,
-            CcusageProvider::Claude,
-            CcusageCommandFlavor::Current,
-        );
+        let npm_exec =
+            ccusage_runner_args(CcusageRunnerKind::NpmExec, &opts, CcusageProvider::Claude);
         assert_eq!(
             npm_exec,
             vec![
@@ -3614,7 +3407,6 @@ mod tests {
                 expected_npm_exec_package.as_str(),
                 "--",
                 "ccusage",
-                "claude",
                 "daily",
                 "--json",
                 "--order",
@@ -3626,18 +3418,12 @@ mod tests {
             ]
         );
 
-        let npx = ccusage_runner_args(
-            CcusageRunnerKind::Npx,
-            &opts,
-            CcusageProvider::Claude,
-            CcusageCommandFlavor::Current,
-        );
+        let npx = ccusage_runner_args(CcusageRunnerKind::Npx, &opts, CcusageProvider::Claude);
         assert_eq!(
             npx,
             vec![
                 "--yes",
-                expected_ccusage_package.as_str(),
-                "claude",
+                expected_claude_package.as_str(),
                 "daily",
                 "--json",
                 "--order",
@@ -3651,7 +3437,7 @@ mod tests {
     }
 
     #[test]
-    fn ccusage_runner_args_codex_use_unified_package_and_bin() {
+    fn ccusage_runner_args_codex_use_scoped_package_and_bin() {
         let opts = CcusageQueryOpts {
             provider: Some("codex".to_string()),
             since: Some("20260101".to_string()),
@@ -3659,38 +3445,11 @@ mod tests {
             home_path: None,
             claude_path: None,
         };
-        let expected_ccusage_package = ccusage_package_spec();
-        let expected_npm_exec_package = format!("--package={expected_ccusage_package}");
+        let expected_codex_package = ccusage_package_spec(CcusageProvider::Codex);
+        let expected_npm_exec_package = format!("--package={expected_codex_package}");
 
-        let bunx = ccusage_runner_args(
-            CcusageRunnerKind::Bunx,
-            &opts,
-            CcusageProvider::Codex,
-            CcusageCommandFlavor::Current,
-        );
-        assert_eq!(
-            bunx,
-            vec![
-                "--silent",
-                expected_ccusage_package.as_str(),
-                "codex",
-                "daily",
-                "--json",
-                "--order",
-                "desc",
-                "--since",
-                "20260101",
-                "--until",
-                "20260131"
-            ]
-        );
-
-        let npm_exec = ccusage_runner_args(
-            CcusageRunnerKind::NpmExec,
-            &opts,
-            CcusageProvider::Codex,
-            CcusageCommandFlavor::Current,
-        );
+        let npm_exec =
+            ccusage_runner_args(CcusageRunnerKind::NpmExec, &opts, CcusageProvider::Codex);
         assert_eq!(
             npm_exec,
             vec![
@@ -3698,8 +3457,7 @@ mod tests {
                 "--yes",
                 expected_npm_exec_package.as_str(),
                 "--",
-                "ccusage",
-                "codex",
+                "ccusage-codex",
                 "daily",
                 "--json",
                 "--order",
@@ -3711,76 +3469,12 @@ mod tests {
             ]
         );
 
-        let npx = ccusage_runner_args(
-            CcusageRunnerKind::Npx,
-            &opts,
-            CcusageProvider::Codex,
-            CcusageCommandFlavor::Current,
-        );
+        let npx = ccusage_runner_args(CcusageRunnerKind::Npx, &opts, CcusageProvider::Codex);
         assert_eq!(
             npx,
             vec![
                 "--yes",
-                expected_ccusage_package.as_str(),
-                "codex",
-                "daily",
-                "--json",
-                "--order",
-                "desc",
-                "--since",
-                "20260101",
-                "--until",
-                "20260131"
-            ]
-        );
-    }
-
-    #[test]
-    fn ccusage_runner_args_legacy_fallback_uses_release_age_safe_packages() {
-        let opts = CcusageQueryOpts {
-            provider: None,
-            since: Some("20260101".to_string()),
-            until: Some("20260131".to_string()),
-            home_path: None,
-            claude_path: None,
-        };
-
-        let claude = ccusage_runner_args(
-            CcusageRunnerKind::Bunx,
-            &opts,
-            CcusageProvider::Claude,
-            CcusageCommandFlavor::Legacy,
-        );
-        assert_eq!(
-            claude,
-            vec![
-                "--silent",
-                "ccusage@18.0.11",
-                "daily",
-                "--json",
-                "--order",
-                "desc",
-                "--since",
-                "20260101",
-                "--until",
-                "20260131"
-            ]
-        );
-
-        let codex_npm = ccusage_runner_args(
-            CcusageRunnerKind::NpmExec,
-            &opts,
-            CcusageProvider::Codex,
-            CcusageCommandFlavor::Legacy,
-        );
-        assert_eq!(
-            codex_npm,
-            vec![
-                "exec",
-                "--yes",
-                "--package=@ccusage/codex@18.0.11",
-                "--",
-                "ccusage-codex",
+                expected_codex_package.as_str(),
                 "daily",
                 "--json",
                 "--order",
@@ -3877,50 +3571,6 @@ mod tests {
                 std::path::PathBuf::from("/usr/bin"),
                 std::path::PathBuf::from("/bin"),
             ]
-        );
-    }
-
-    #[test]
-    fn nvm_default_bin_path_resolves_version_with_v_prefix() {
-        let home = std::env::temp_dir().join("openusage-test-nvm-v-prefix");
-        let alias_dir = home.join(".nvm/alias");
-        std::fs::create_dir_all(&alias_dir).expect("create alias dir");
-        std::fs::write(alias_dir.join("default"), "v22.16.0").expect("write alias");
-        let result = nvm_default_bin_path(&home);
-        let _ = std::fs::remove_dir_all(&home);
-        assert_eq!(result, Some(home.join(".nvm/versions/node/v22.16.0/bin")));
-    }
-
-    #[test]
-    fn nvm_default_bin_path_resolves_version_without_v_prefix() {
-        let home = std::env::temp_dir().join("openusage-test-nvm-no-v-prefix");
-        let alias_dir = home.join(".nvm/alias");
-        std::fs::create_dir_all(&alias_dir).expect("create alias dir");
-        std::fs::write(alias_dir.join("default"), "22.16.0").expect("write alias");
-        let result = nvm_default_bin_path(&home);
-        let _ = std::fs::remove_dir_all(&home);
-        assert_eq!(result, Some(home.join(".nvm/versions/node/v22.16.0/bin")));
-    }
-
-    #[test]
-    fn nvm_default_bin_path_returns_none_when_alias_missing() {
-        let home = std::env::temp_dir().join("openusage-test-nvm-no-alias");
-        let _ = std::fs::remove_dir_all(&home);
-        let result = nvm_default_bin_path(&home);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn ccusage_path_entries_with_includes_nvm_default_version() {
-        let home = std::env::temp_dir().join("openusage-test-nvm-entries");
-        let alias_dir = home.join(".nvm/alias");
-        std::fs::create_dir_all(&alias_dir).expect("create alias dir");
-        std::fs::write(alias_dir.join("default"), "22.16.0").expect("write alias");
-        let entries = ccusage_path_entries_with(Some(&home), None);
-        let _ = std::fs::remove_dir_all(&home);
-        assert!(
-            entries.contains(&home.join(".nvm/versions/node/v22.16.0/bin")),
-            "expected nvm default version bin in entries"
         );
     }
 
@@ -4129,74 +3779,6 @@ Saved lockfile
         assert_eq!(calls, vec![CcusageRunnerKind::Bunx]);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn ccusage_runner_retries_legacy_package_when_current_package_fails() {
-        use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
-
-        let test_id = format!(
-            "openusage-ccusage-legacy-fallback-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time")
-                .as_nanos()
-        );
-        let dir = std::env::temp_dir().join(test_id);
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        let script_path = dir.join("fake-bunx.sh");
-        let args_path = dir.join("args.log");
-
-        let mut script = std::fs::File::create(&script_path).expect("create script");
-        let script_body = format!(
-            r#"#!/bin/sh
-echo "$*" >> "{}"
-case "$*" in
-  *"@ccusage/codex@18.0.11"*)
-    printf '{{"daily":[]}}\n'
-    exit 0
-    ;;
-  *)
-    echo "blocked current package" >&2
-    exit 1
-    ;;
-esac
-"#,
-            args_path.display()
-        );
-        script
-            .write_all(script_body.as_bytes())
-            .expect("write script");
-        let mut permissions = script.metadata().expect("script metadata").permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script_path, permissions).expect("make script executable");
-
-        let opts = CcusageQueryOpts {
-            provider: Some("codex".to_string()),
-            since: Some("20260101".to_string()),
-            until: None,
-            home_path: None,
-            claude_path: None,
-        };
-        let result = run_ccusage_with_runner(
-            CcusageRunnerKind::Bunx,
-            script_path.to_string_lossy().as_ref(),
-            &opts,
-            CcusageProvider::Codex,
-            "codex",
-        );
-        assert_eq!(
-            result,
-            CcusageRunnerResult::Success(r#"{"daily":[]}"#.to_string())
-        );
-
-        let calls = std::fs::read_to_string(&args_path).expect("read args log");
-        assert!(calls.contains("ccusage@20.0.2 codex daily"));
-        assert!(calls.contains("@ccusage/codex@18.0.11 daily"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn ccusage_timeout_log_uses_actual_timeout() {
         assert_eq!(
@@ -4209,55 +3791,15 @@ esac
         );
     }
 
-    #[test]
-    fn probe_deadline_clamps_host_timeout_to_remaining_budget() {
-        let deadline = ProbeDeadline::at(Instant::now() + Duration::from_millis(25));
-        let clamped = deadline
-            .clamp_duration(Duration::from_secs(10))
-            .expect("remaining budget should produce a host timeout");
-
-        assert!(
-            clamped <= Duration::from_millis(25),
-            "host timeout should not exceed remaining probe budget"
-        );
-        assert!(
-            clamped >= Duration::from_millis(1),
-            "host timeout should stay non-zero for blocking clients"
-        );
-    }
-
-    #[test]
-    fn probe_deadline_does_not_extend_elapsed_budget() {
-        let deadline = ProbeDeadline::at(Instant::now());
-
-        assert_eq!(deadline.clamp_duration(Duration::from_secs(10)), None);
-    }
-
     #[cfg(unix)]
     #[test]
     fn ccusage_timeout_kills_descendant_and_closes_pipes() {
         use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
-        use std::path::Path;
         use std::time::{Duration, Instant};
 
         fn pid_exists(pid: i32) -> bool {
             unsafe { libc::kill(pid, 0) == 0 }
-        }
-
-        fn read_pid_file(path: &Path, deadline: Instant) -> i32 {
-            loop {
-                if let Ok(pid_text) = std::fs::read_to_string(path) {
-                    let pid_text = pid_text.trim();
-                    if !pid_text.is_empty() {
-                        return pid_text.parse().expect("parse descendant pid");
-                    }
-                }
-                if Instant::now() >= deadline {
-                    panic!("descendant pid file was not created at {}", path.display());
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
         }
 
         let test_id = format!(
@@ -4297,8 +3839,7 @@ wait
             &opts,
             CcusageProvider::Codex,
             "codex",
-            CcusageCommandFlavor::Current,
-            Duration::from_secs(1),
+            Duration::from_millis(100),
         );
 
         assert_eq!(result, CcusageRunnerResult::TimedOut);
@@ -4307,7 +3848,11 @@ wait
             "timeout cleanup should not hang on inherited stdout/stderr pipes"
         );
 
-        let descendant_pid = read_pid_file(&pid_path, Instant::now() + Duration::from_secs(1));
+        let descendant_pid: i32 = std::fs::read_to_string(&pid_path)
+            .expect("read descendant pid")
+            .trim()
+            .parse()
+            .expect("parse descendant pid");
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while pid_exists(descendant_pid) && Instant::now() < deadline {
