@@ -123,13 +123,23 @@
     }
 
     // -- Progress: monthly credit usage (drives tray icon % and overview bar) --
+    // Use next_monthly_grant_amount as total plan points (more reliable).
+    // plan_points_balance now returns remaining plan points, not the total
+    // allowance, making (total - remaining) / total incorrect when using it
+    // as both numerator and denominator at billing period boundaries.
     var nextGrantMs = null
     if (typeof balanceResp.next_monthly_grant_time === "number") {
       nextGrantMs = balanceResp.next_monthly_grant_time / 1000
     }
-    if (planPoints !== null && planPoints > 0 && points !== null) {
-      var usedPoints = Math.max(0, planPoints - points)
-      var pctUsed = (usedPoints / planPoints) * 100
+    var totalPlanPoints = null
+    if (typeof balanceResp.next_monthly_grant_amount === "number" && balanceResp.next_monthly_grant_amount > 0) {
+      totalPlanPoints = balanceResp.next_monthly_grant_amount
+    } else if (planPoints !== null && planPoints > 0) {
+      totalPlanPoints = planPoints
+    }
+    if (totalPlanPoints !== null && totalPlanPoints > 0 && points !== null) {
+      var usedPoints = Math.max(0, totalPlanPoints - points)
+      var pctUsed = (usedPoints / totalPlanPoints) * 100
       var progressOpts = {
         label: "Monthly credits",
         used: pctUsed,

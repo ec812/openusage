@@ -172,8 +172,9 @@ describe("command-code plugin", () => {
     var plugin = await loadPlugin();
     var result = plugin.probe(ctx);
 
-    // total plan = 3.4101 + 6.5961 = 10.0062
-    // used% = 3.4101 / 10.0062 = 34.1%
+    // plan limit = $10 (individual-go)
+    // used = 10 - 6.5961 = 3.4039
+    // used% = 3.4039 / 10 = 34.0%
     expect(result.plan).toBe("Individual Go");
 
     var monthlyLine = result.lines.find(function (l) { return l.label === "Monthly credits"; });
@@ -255,6 +256,30 @@ describe("command-code plugin", () => {
 
     var monthlyLine = result.lines.find(function (l) { return l.label === "Monthly credits"; });
     expect(monthlyLine.used).toBe(100);
+  });
+
+  it("uses plan limit from subscription when billing period resets (usage summary stale)", async () => {
+    var ctx = makePluginTestContext();
+    setAuth(ctx);
+    // Billing period just reset: credits endpoint correctly shows ~$9.99 remaining,
+    // but usage summary hasn't reset and returns stale old-period data ($7.54 used).
+    // With plan limit ($10 for individual-go), the correct usage is $10 - $9.99 = $0.01.
+    mockEndpoints(
+      ctx,
+      makeCreditsResponse({ monthlyCredits: 9.9926 }),  // remaining (correct for new period)
+      makeUsageSummaryResponse({ totalMonthlyCredits: 7.5457 }), // used (stale old period data)
+      makeSubscriptionResponse(),
+    );
+
+    var plugin = await loadPlugin();
+    var result = plugin.probe(ctx);
+
+    // plan limit = $10
+    // used = $10 - $9.9926 = $0.0074
+    // used% = 0.0074 / 10 = 0.074%
+    var monthlyLine = result.lines.find(function (l) { return l.label === "Monthly credits"; });
+    expect(monthlyLine.used).toBeCloseTo(0.1, 0); // rounds to 0.1%
+    expect(Math.round(monthlyLine.used)).toBe(0);
   });
 
   it("sets resetsAt on progress when billing period end is available", async () => {

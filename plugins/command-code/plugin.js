@@ -12,6 +12,15 @@
     "enterprise": "Enterprise",
   }
 
+  // Monthly credit limits per plan (used instead of inferred total when available)
+  var PLAN_CREDITS = {
+    "individual-go": 10,
+    "individual": 30,
+    "pro": 100,
+    "team": 500,
+    "enterprise": 500,
+  }
+
   function readNumber(value) {
     var n = Number(value)
     return Number.isFinite(n) ? n : null
@@ -112,11 +121,12 @@
     }
 
     // -- Parse plan name and billing period from subscription --
+    var planId = null
     var planLabel = null
     var billingPeriodEnd = null
     if (subResp && subResp.success && subResp.data && typeof subResp.data === "object") {
       if (typeof subResp.data.planId === "string") {
-        var planId = subResp.data.planId
+        planId = subResp.data.planId
         planLabel = PLAN_LABELS[planId] || ctx.fmt.planLabel(planId)
       }
       // Try to get billing period end date
@@ -128,10 +138,24 @@
     var lines = []
 
     // -- Progress bar: Monthly credits used vs total plan --
-    // total plan = used + remaining
-    if (creditsRemaining !== null && monthlyUsed !== null) {
+    // Prefer known plan limit from subscription planId over inferred total.
+    // The usage summary endpoint (totalMonthlyCredits) can return stale data
+    // at billing period boundaries, while the credits endpoint (monthlyCredits)
+    // reliably reflects the current period.
+    var usedPercent = null
+    var planLimit = planId ? PLAN_CREDITS[planId] : null
+
+    if (planLimit !== null && creditsRemaining !== null) {
+      // Known plan limit: calculate from remaining credits
+      var used = Math.max(0, planLimit - creditsRemaining)
+      usedPercent = (used / planLimit) * 100
+    } else if (creditsRemaining !== null && monthlyUsed !== null) {
+      // Fallback: infer total from used + remaining
       var totalPlan = monthlyUsed + Math.max(0, creditsRemaining)
-      var usedPercent = totalPlan > 0 ? (monthlyUsed / totalPlan) * 100 : 100
+      usedPercent = totalPlan > 0 ? (monthlyUsed / totalPlan) * 100 : 100
+    }
+
+    if (usedPercent !== null) {
       if (usedPercent > 100) usedPercent = 100
       if (usedPercent < 0) usedPercent = 0
 

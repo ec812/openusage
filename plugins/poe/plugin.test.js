@@ -7,7 +7,9 @@ var MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 function makeBalanceResponse(overrides = {}) {
   return {
     current_point_balance: 1000000,
-    plan_points_balance: 2000000,
+    plan_points_balance: 1000000,
+    addon_point_balance: 0,
+    next_monthly_grant_amount: 2000000,
     total_balance_usd: "30.30",
     next_daily_grant_amount: 3000,
     // real API returns microseconds
@@ -124,6 +126,70 @@ describe("poe plugin", () => {
 
     var calls = ctx.host.http.request.mock.calls;
     expect(calls[0][0].headers.Authorization).toBe("Bearer my-secret-key");
+  });
+
+  it("uses next_monthly_grant_amount for progress when plan_points_balance equals current (billing boundary)", async () => {
+    var ctx = makePluginTestContext();
+    setApiKey(ctx);
+    // Real API shape: plan_points_balance == current_point_balance (remaining),
+    // next_monthly_grant_amount is the actual monthly allowance.
+    ctx.host.http.request.mockReturnValue({
+      status: 200,
+      bodyText: JSON.stringify({
+        current_point_balance: 403978,
+        plan_points_balance: 403978,
+        addon_point_balance: 0,
+        next_monthly_grant_amount: 1000000,
+        total_balance_usd: "12.24",
+        next_daily_grant_amount: 3000,
+        next_monthly_grant_time: (Date.now() + 15 * 24 * 60 * 60 * 1000) * 1000,
+      }),
+    });
+
+    var plugin = await loadPlugin();
+    var result = plugin.probe(ctx);
+
+    // total = 1,000,000 (next_monthly_grant_amount)
+    // remaining = 403,978 (plan_points_balance)
+    // used = 596,022
+    // pct = 59.6%
+    var progressLine = result.lines.find(function (l) {
+      return l.label === "Monthly credits";
+    });
+    expect(progressLine).toBeTruthy();
+    expect(Math.round(progressLine.used)).toBe(60);
+  });
+
+  it("uses current_point_balance (incl addons) for progress when plan_points_balance is 0", async () => {
+    var ctx = makePluginTestContext();
+    setApiKey(ctx);
+    // plan_points_balance = 0 (all plan pts used), but user bought addons
+    // current_point_balance = 400k (addon pts remaining)
+    ctx.host.http.request.mockReturnValue({
+      status: 200,
+      bodyText: JSON.stringify({
+        current_point_balance: 403978,
+        plan_points_balance: 0,
+        addon_point_balance: 403978,
+        next_monthly_grant_amount: 1000000,
+        total_balance_usd: "12.24",
+        next_daily_grant_amount: 3000,
+        next_monthly_grant_time: (Date.now() + 15 * 24 * 60 * 60 * 1000) * 1000,
+      }),
+    });
+
+    var plugin = await loadPlugin();
+    var result = plugin.probe(ctx);
+
+    // total = 1,000,000 (next_monthly_grant_amount)
+    // remaining = 403,978 (current_point_balance, includes addons)
+    // used = 596,022
+    // pct = 59.6% (not 100%)
+    var progressLine = result.lines.find(function (l) {
+      return l.label === "Monthly credits";
+    });
+    expect(progressLine).toBeTruthy();
+    expect(Math.round(progressLine.used)).toBe(60);
   });
 
   it("handles missing usd field gracefully", async () => {

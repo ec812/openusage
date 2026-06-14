@@ -14,7 +14,8 @@
     "test": "vitest",
     "test:watch": "vitest --watch",
     "test:coverage": "vitest run --coverage.enabled",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:build": "CI=true tauri build"
   },
   "dependencies": {
     "@aptabase/tauri": "^0.4.1",
